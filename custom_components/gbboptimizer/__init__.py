@@ -26,8 +26,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     client_id = f"ha_{plant_id}"
 
     def on_connect(client, userdata, flags, rc):
+        _LOGGER.debug(f"[{plant_id}] on_connect called with rc={rc}")
         if rc == 0:
-            _LOGGER.info(f"[{plant_id}] Connected to MQTT broker")
+            _LOGGER.info(
+                f"[{plant_id}] Successfully connected to MQTT broker at {broker}:{port} with client_id '{client_id}'"
+            )
+            if use_tls:
+                _LOGGER.debug(f"[{plant_id}] TLS is enabled")
+
             topic = f"{plant_id}/signals/data"
             client.subscribe(topic)
             _LOGGER.info(f"[{plant_id}] Subscribed to topic: {topic}")
