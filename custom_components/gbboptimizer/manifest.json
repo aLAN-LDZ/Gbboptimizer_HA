@@ -1,0 +1,11 @@
+{
+  "domain": "gbboptimizer",
+  "name": "Gbboptimizer",
+  "config_flow": true,
+  "codeowners": ["@aLAN-LDZ"],
+  "dependencies": [],
+  "documentation": "https://github.com/aLAN-LDZ/Gbboptimizer_HA",
+  "iot_class": "cloud_polling",
+  "requirements": ["paho-mqtt>=1.6.1"],
+  "version": "0.0.1"
+}
