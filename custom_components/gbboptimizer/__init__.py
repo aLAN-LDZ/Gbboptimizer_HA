@@ -49,6 +49,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         client.on_message = on_message
 
         if use_tls:
+            # Ustawiamy TLS w sposób nieblokujący, ale uwaga: paho-mqtt standardowo robi to synchronicznie
             client.tls_set(cert_reqs=ssl.CERT_NONE)
             client.tls_insecure_set(True)
 
@@ -57,12 +58,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         mqtt_clients[plant_id] = client
 
     try:
+        # Tutaj przenosimy blokujący setup MQTT do wątku roboczego
         await hass.async_add_executor_job(setup_mqtt_client)
     except Exception as e:
         _LOGGER.error(f"Failed to connect to MQTT broker: {e}")
         raise ConfigEntryNotReady from e
 
     return True
+
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     plant_id = entry.data[CONF_PLANT_ID]
