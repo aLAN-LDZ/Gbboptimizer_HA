@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import ssl
 
@@ -5,13 +6,21 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
 
-from .const import DOMAIN, CONF_BROKER, CONF_PORT, CONF_PLANT_ID, CONF_PLANT_TOKEN, CONF_USE_TLS
+from .const import (
+    DOMAIN,
+    CONF_BROKER,
+    CONF_PORT,
+    CONF_PLANT_ID,
+    CONF_PLANT_TOKEN,
+    CONF_USE_TLS,
+)
 
-import paho.mqtt.client as mqtt
+from asyncio_mqtt import Client, MqttError
 
 _LOGGER = logging.getLogger(__name__)
 
 mqtt_clients = {}
+
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     _LOGGER.info("Setting up GbbOptimizer MQTT integration")
@@ -24,54 +33,62 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     client_id = f"ha_{plant_id}"
 
-    def on_connect(client, userdata, flags, rc):
-        _LOGGER.debug(f"[{plant_id}] on_connect called with rc={rc}")
-        if rc == 0:
-            _LOGGER.info(
-                f"[{plant_id}] Successfully connected to MQTT broker at {broker}:{port} with client_id '{client_id}'"
-            )
-            if use_tls:
-                _LOGGER.debug(f"[{plant_id}] TLS is enabled")
+    tls_context = None
+    if use_tls:
+        tls_context = ssl.create_default_context()
+        # Jeśli chcesz wyłączyć weryfikację certyfikatu (niezalecane):
+        # tls_context.check_hostname = False
+        # tls_context.verify_mode = ssl.CERT_NONE
 
-            topic = f"{plant_id}/signals/data"
-            client.subscribe(topic)
-            _LOGGER.info(f"[{plant_id}] Subscribed to topic: {topic}")
-        else:
-            _LOGGER.error(f"[{plant_id}] MQTT connection failed with code {rc}")
+    client = Client(
+        hostname=broker,
+        port=port,
+        username=plant_id,
+        password=token,
+        client_id=client_id,
+        tls_context=tls_context,
+    )
 
-    def on_message(client, userdata, msg):
-        _LOGGER.info(f"[{plant_id}] Received MQTT message on {msg.topic}: {msg.payload.decode()}")
+    # Task do odbierania wiadomości MQTT (będzie działał w tle)
+    async def mqtt_message_handler():
+        async with client.unfiltered_messages() as messages:
+            await client.subscribe(f"{plant_id}/signals/data")
+            _LOGGER.info(f"[{plant_id}] Subscribed to topic: {plant_id}/signals/data")
 
-    def setup_mqtt_client():
-        client = mqtt.Client(client_id=client_id)
-        client.username_pw_set(plant_id, token)
-        client.on_connect = on_connect
-        client.on_message = on_message
+            async for message in messages:
+                payload = message.payload.decode()
+                topic = message.topic
+                _LOGGER.info(f"[{plant_id}] Received MQTT message on {topic}: {payload}")
+                # Tutaj możesz dodać dalsze przetwarzanie wiadomości
 
-        if use_tls:
-            # Ustawiamy TLS w sposób nieblokujący, ale uwaga: paho-mqtt standardowo robi to synchronicznie
-            client.tls_set(cert_reqs=ssl.CERT_NONE)
-            client.tls_insecure_set(True)
-
-        client.connect(broker, port)
-        client.loop_start()
-        mqtt_clients[plant_id] = client
-
+    # Start klienta MQTT i odbioru wiadomości w tle
     try:
-        # Tutaj przenosimy blokujący setup MQTT do wątku roboczego
-        await hass.async_add_executor_job(setup_mqtt_client)
-    except Exception as e:
-        _LOGGER.error(f"Failed to connect to MQTT broker: {e}")
+        await client.connect()
+    except MqttError as e:
+        _LOGGER.error(f"[{plant_id}] Failed to connect to MQTT broker: {e}")
         raise ConfigEntryNotReady from e
+
+    mqtt_task = hass.async_create_task(mqtt_message_handler())
+    mqtt_clients[plant_id] = (client, mqtt_task)
 
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     plant_id = entry.data[CONF_PLANT_ID]
-    client = mqtt_clients.pop(plant_id, None)
-    if client:
+    client_task = mqtt_clients.pop(plant_id, None)
+
+    if client_task:
+        client, task = client_task
+
         _LOGGER.info(f"[{plant_id}] Disconnecting MQTT client")
-        client.loop_stop()
-        client.disconnect()
+
+        await client.disconnect()
+
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
     return True
