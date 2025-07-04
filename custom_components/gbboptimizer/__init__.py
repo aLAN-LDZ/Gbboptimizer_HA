@@ -11,7 +11,6 @@ import paho.mqtt.client as mqtt
 
 _LOGGER = logging.getLogger(__name__)
 
-# Przechowujemy klienta, by móc go zatrzymać przy wyłączeniu integracji
 mqtt_clients = {}
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -43,19 +42,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     def on_message(client, userdata, msg):
         _LOGGER.info(f"[{plant_id}] Received MQTT message on {msg.topic}: {msg.payload.decode()}")
 
-    client = mqtt.Client(client_id=client_id)
-    client.username_pw_set(plant_id, token)
-    client.on_connect = on_connect
-    client.on_message = on_message
+    def setup_mqtt_client():
+        client = mqtt.Client(client_id=client_id)
+        client.username_pw_set(plant_id, token)
+        client.on_connect = on_connect
+        client.on_message = on_message
 
-    if use_tls:
-        client.tls_set(cert_reqs=ssl.CERT_NONE)
-        client.tls_insecure_set(True)
+        if use_tls:
+            client.tls_set(cert_reqs=ssl.CERT_NONE)
+            client.tls_insecure_set(True)
 
-    try:
         client.connect(broker, port)
         client.loop_start()
         mqtt_clients[plant_id] = client
+
+    try:
+        await hass.async_add_executor_job(setup_mqtt_client)
     except Exception as e:
         _LOGGER.error(f"Failed to connect to MQTT broker: {e}")
         raise ConfigEntryNotReady from e
